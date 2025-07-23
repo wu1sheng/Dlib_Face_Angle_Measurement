@@ -65,29 +65,6 @@
    您可以从以下链接下载该模型：http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
    下载后请解压得到.dat文件。
 
-## **使用方法**
-
-1. 克隆或下载项目  
-   将本项目代码克隆到本地或下载ZIP文件并解压。  
-   git clone \[Your\_GitHub\_Repo\_URL\]  
-   cd \[Your\_Project\_Folder\]
-
-2. 准备模型文件  
-   确保shape\_predictor\_68\_face\_landmarks.dat文件位于model/目录下。如果model/目录不存在，请手动创建。  
-3. 放置输入图片  
-   将您要处理的人脸照片（例如22.jpg）放置在项目根目录下。您可以在代码中修改IMAGE\_PATH变量来指定不同的图片。  
-4. 激活环境并运行脚本  
-   打开终端或命令行，首先激活您的conda环境，然后导航到项目根目录，运行主Python脚本：  
-   conda activate face39 \# 如果您之前创建的环境名为face39  
-   python your\_main\_script\_name.py
-
-   （请将your\_main\_script\_name.py替换为您的实际脚本文件名，例如draw2.0.py）  
-5. 查看结果  
-   程序将按步骤弹出多个窗口，展示图像处理的中间结果（如肤色掩膜、轮廓等），最后显示带有所有绘制线条和角度的最终结果图。请按任意键关闭每个窗口以继续。
-
-## **示例结果**
-
-*图：项目处理后的人脸几何特征分析图*
 
 ## **调试与优化**
 
