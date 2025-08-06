@@ -53,12 +53,12 @@
    如果尚未安装，请从官方网站下载并安装 Anaconda 或 Miniconda。  
 2. **创建并激活干净环境**  
    \# 创建 Python 3.9 环境 (推荐版本，可根据需要调整)  
-   conda create \-n face39 python=3.9 \-y  
+   conda create -n face_app python=3.9 
    \# 激活环境（每次使用项目前都需要执行此命令）  
-   conda activate face39
+   conda activate face_app
 
 3. **一键安装核心库（conda-forge 通道）**  
-   conda install \-c conda-forge numpy opencv dlib scipy
+   conda install -c conda-forge numpy opencv dlib scipy
 
 4. Dlib 模型文件  
    本项目需要Dlib的预训练模型shape_predictor_68_face_landmarks.dat.bz2。请确保将此文件下载并放置在项目根目录下的model/文件夹中。  
