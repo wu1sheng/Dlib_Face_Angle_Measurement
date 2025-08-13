@@ -23,7 +23,8 @@ def process_and_draw_face_geometry(image_path,
                                     hsv_lower=(5, 53, 92),
                                     hsv_upper=(18, 140, 225),
                                     ycbcr_lower=(95, 135, 80),
-                                    ycbcr_upper=(220, 165, 116)):
+                                    ycbcr_upper=(220, 165, 116),
+                                    ref_real_width_mm_at_row=170.0):
     """
     Processes a face image to draw geometric features,
     allowing customization of skin detection thresholds.
@@ -82,7 +83,7 @@ def process_and_draw_face_geometry(image_path,
         signs = np.array(signs)
         return np.all(signs >= -1e-6) or np.all(signs <= 1e-6)
 
-    def draw_angle(img_ref, center, vec1, vec2, color):
+    def draw_angle(img_ref, center, vec1, vec2, color, prefer_obtuse=False):
         cosang = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2) + 1e-6)
         cosang = np.clip(cosang, -1.0, 1.0)
         angle = math.degrees(math.acos(cosang))
@@ -104,7 +105,7 @@ def process_and_draw_face_geometry(image_path,
         cv2.ellipse(img_ref, tuple(center), (RADIUS, RADIUS),
                     0, float(start), float(end), color, ARC_THICK)
 
-        txt = f"{angle:.3f}°"
+        txt = f"{angle:.3f}deg"
         (w, h), _ = cv2.getTextSize(txt, FONT, TEXT_SCALE, TEXT_THICK)
         mid_ang = math.radians(start + diff / 2)
         bx = int(center[0] + math.cos(mid_ang) * (RADIUS + TEXT_DIST)) - w // 2
@@ -289,9 +290,10 @@ def process_and_draw_face_geometry(image_path,
         face_contour_pts = [tuple(p[0]) for p in approx_contour]
 
     if not face_contour_pts:
-        raise RuntimeError("No face contour detected by traditional methods. Please check skin color ranges or image.")
-
-    jaw_pts = face_contour_pts
+        # Fallback: use dlib landmarks jawline (0..16) when color mask fails
+        jaw_pts = pts[:17].tolist()
+    else:
+        jaw_pts = face_contour_pts
 
     # Visualize the new contour line (green)
     cv2.polylines(out, [np.array(jaw_pts, dtype=np.int32)], True, (0, 255, 0), 3)
@@ -305,6 +307,7 @@ def process_and_draw_face_geometry(image_path,
     cv2.line(out, (0, cheek_upper_bound_y), (img.shape[1], cheek_upper_bound_y), (0, 0, 0), 2)
 
     # 13. Calculate for left and right intersection points separately
+    angles = [None, None]
     for side, P in enumerate(ints):
         tangents = []
 
@@ -344,11 +347,121 @@ def process_and_draw_face_geometry(image_path,
 
         v = np.array(Q) - np.array(P)
         v = v / (np.linalg.norm(v) + 1e-6)
+
+        # --- Store baseline jaw tangent for this side ---
+        try:
+            side_tangents
+        except NameError:
+            side_tangents = [None, None]
+        side_tangents[side] = {'P': P, 'v': v}
+
         pt1 = (int(P[0] - v[0] * LARGE), int(P[1] - v[1] * LARGE))
         pt2 = (int(P[0] + v[0] * LARGE), int(P[1] + v[1] * LARGE))
         cv2.line(out, pt1, pt2, TAN_COLOR, THICK)
         cv2.circle(out, Q, 12, TAN_COLOR, -1)
 
         draw_angle(out, P, para_vec, tan_vec, ARC_COLOR)
+        angle=draw_angle(out, P, para_vec, tan_vec, ARC_COLOR)
+        angles[side] = angle
 
-    return out # Return the processed image
+        # --- Additional measurements: lower-face width (horizontal mouth line) and side angles (upper only) ---
+        # 1) Lower-face width: horizontal line at average mouth-corner y, intersect with jaw contour
+        y_mouth_h = int(0.5*(left_corner[1] + right_corner[1]))
+        # Draw the mouth horizontal reference
+        cv2.line(out, (0, y_mouth_h), (img_w, y_mouth_h), (255, 255, 0), 2)
+        xs = []
+        for (x1,y1),(x2,y2) in zip(jaw_pts, jaw_pts[1:] + jaw_pts[:1]):
+            if (y1 - y_mouth_h) * (y2 - y_mouth_h) <= 0 and (y1 != y2):
+                # linear interpolation to find intersection x
+                x = x1 + (y_mouth_h - y1) * (x2 - x1) / (y2 - y1 + 1e-6)
+                xs.append(x)
+        lower_face_width_px = None
+        left_intersect = None
+        right_intersect = None
+        if len(xs) >= 2:
+            xs_sorted = sorted(xs)
+            xL, xR = int(xs_sorted[0]), int(xs_sorted[-1])
+            left_intersect = (xL, y_mouth_h)
+            right_intersect = (xR, y_mouth_h)
+            lower_face_width_px = float(abs(xR - xL))
+            # visualize
+            cv2.circle(out, left_intersect, 8, (255, 0, 0), -1)
+            cv2.circle(out, right_intersect, 8, (255, 0, 0), -1)
+            cv2.line(out, left_intersect, right_intersect, (255, 0, 0), 4)
+
+        # mm conversion using provided real width for this row (default 170 mm)
+        mm_per_px = float(ref_real_width_mm_at_row) / float(img_w) if ref_real_width_mm_at_row else None
+        lower_face_width_mm = (lower_face_width_px * mm_per_px) if (mm_per_px and lower_face_width_px is not None) else None
+
+        # annotate lower face width in cm on the image
+        if lower_face_width_mm is not None and left_intersect and right_intersect:
+            lw_cm = lower_face_width_mm / 10.0
+            midx = int((left_intersect[0] + right_intersect[0]) / 2)
+            midy = y_mouth_h
+            label = f"{lw_cm:.2f} cm"
+            (tw, th), _ = cv2.getTextSize(label, FONT, 1.0, 2)
+            bx, by = midx + 10, midy - 10
+            cv2.rectangle(out, (bx - 4, by - th - 6), (bx + tw + 4, by + 4), (0,0,0), -1)
+            cv2.putText(out, label, (bx, by), FONT, 1.0, (0,0,255), 2, cv2.LINE_AA)
+
+
+        # 2) Side angles (upper tangent from S = intersection of baseline jaw tangent with mouth horizontal)
+        side_angles_deg = {'left': None, 'right': None}
+        def compute_side_angle_for(side_idx):
+            info = side_tangents[side_idx] if 'side_tangents' in locals() else None
+            if info is None:
+                return None
+            P0 = info['P']; v0 = info['v']
+            # S: intersection with mouth horizontal; handle near-horizontal v0 robustly
+            if abs(v0[1]) < 1e-6:
+                S = (int(P0[0]), y_mouth_h)
+            else:
+                tS = (y_mouth_h - P0[1]) / (v0[1] + 1e-6)
+                S = (int(P0[0] + v0[0]*tS), y_mouth_h)
+            cv2.circle(out, S, 6, (128, 0, 255), -1)
+            # find upper supporting tangent from S
+            best = None
+            for Qc in jaw_pts:
+                if Qc[1] >= y_mouth_h:
+                    continue
+                if is_supporting_line(S, Qc, jaw_pts):
+                    d2 = (Qc[0]-S[0])**2 + (Qc[1]-S[1])**2
+                    if best is None or d2 < best[0]:
+                        best = (d2, Qc)
+            if best is None:
+                # fallback: nearest upper point
+                cand = [Q for Q in jaw_pts if Q[1] < y_mouth_h]
+                if cand:
+                    Qc = min(cand, key=lambda q: (q[0]-S[0])**2 + (q[1]-S[1])**2)
+                    best = ((Qc[0]-S[0])**2 + (Qc[1]-S[1])**2, Qc)
+                else:
+                    return None
+            Qs = best[1]
+            vs = np.array(Qs, dtype=float) - np.array(S, dtype=float)
+            vs = vs / (np.linalg.norm(vs)+1e-6)
+            pt1s = (int(S[0] - vs[0]*LARGE), int(S[1] - vs[1]*LARGE))
+            pt2s = (int(S[0] + vs[0]*LARGE), int(S[1] + vs[1]*LARGE))
+            cv2.line(out, pt1s, pt2s, (255, 128, 0), 2)
+            # draw obtuse arc at S
+            draw_angle(out, S, v0, vs, (255, 128, 0), prefer_obtuse=True)
+            # numeric obtuse angle
+            cosang = float(np.dot(vs, v0) / (np.linalg.norm(vs)*np.linalg.norm(v0) + 1e-6))
+            cosang = max(min(cosang, 1.0), -1.0)
+            ang = math.degrees(math.acos(cosang))
+            ang = 180.0 - min(ang, 180.0 - ang)
+            return ang
+        side_angles_deg['left'] = compute_side_angle_for(0)
+        side_angles_deg['right'] = compute_side_angle_for(1)
+
+        # package metrics
+        metrics = {
+            'lower_face_width_px': lower_face_width_px,
+            'lower_face_width_mm': lower_face_width_mm,
+            'mm_per_px': mm_per_px,
+            'mouth_line': {'y': y_mouth_h, 'left_intersect': left_intersect, 'right_intersect': right_intersect},
+            'side_angles_deg': side_angles_deg
+        }
+        # 14. 返回处理图 + 左右角（None 表示未测到）
+        left_angle = angles[0] if angles[0] is not None else 0.0
+        right_angle = angles[1] if angles[1] is not None else 0.0
+    return out, left_angle, right_angle, metrics # Return the processed image and metrics
